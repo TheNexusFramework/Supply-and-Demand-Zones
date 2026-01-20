@@ -1,0 +1,444 @@
+//@version=5
+indicator("Supply and Demand Zones", shorttitle="Supply and Demand Zones", overlay=true, max_boxes_count = 500)
+
+//inputs
+candleDifferenceScale = input.float(defval = 1.8, minval = 1, title = 'Zone Difference Scale', tooltip = 'The scale of how much a candle needs to be larger than a previous to be considered a zone. (candleChange / candleChange[1] > {value}, minimum value 1.0, default 1.8)', group = 'Zone Settings')
+
+zoneOffset = input.int(defval = 15, minval = 0, title="Zone Extension", group = 'Display Settings', tooltip = 'How much to extend zones to the right of latest bar. (In bars)')
+displayLowerTFZones = input.bool(false, title="Display Lower Timeframe Zones", group = 'Display Settings', tooltip = 'Whether to or not to display zones from a lower timeframe. ie. 2h zones on 4h timeframe (Recommended OFF).')
+
+supplyEnable = input(true, title = "Enable Supply Zones", group = "Zone Personalization")
+supplyColor = input.color(defval = color.rgb(242, 54, 69, 90), title = 'Supply Background Color', group = 'Zone Personalization')
+supplyBorderColor = input.color(defval = color.rgb(0, 0, 0, 0), title = 'Supply Border Color', group = 'Zone Personalization')
+
+demandEnable = input(true, title = "Enable Demand Zones", group = "Zone Personalization")
+demandColor = input.color(defval = color.rgb(76, 175, 80, 87), title = 'Demand Background Color', group = 'Zone Personalization')
+demandBorderColor = input.color(defval = color.rgb(0, 0, 0, 0), title = 'Demand Border Color', group = 'Zone Personalization')
+
+textEnable = input(true, title = "Display Text", group = 'Text Settings')
+displayHL = input.bool(false, title="Display High/Low", group = 'Text Settings', tooltip = 'Whether to or not to display the tops and bottoms of a zone as text. ie. Top: 4000.00 Bottom: 3900.00.')
+textColor = input.color(defval = color.rgb(0, 0, 0), title = 'Text Color', group = 'Text Settings')
+textSize = input.string("Small", title="Text Size", options=["Auto", "Tiny", "Small", "Normal", "Large", "Huge"], group = 'Text Settings')
+halign = input.string("Right", title="Horizontal Alignment", options=["Left", "Center", "Right"], group = 'Text Settings')
+supplyValign = input.string("Bottom", title="Vertical Alignment (Supply)", options=["Top", "Center", "Bottom"], group = 'Text Settings')
+demandValign = input.string("Top", title="Vertical Alignment (Demand)", options=["Top", "Center", "Bottom"], group = 'Text Settings')
+
+displayFormingZones = input.bool(false, title="Show Forming Zones", group = 'Timeframe Options', tooltip = 'Shows zones that could potentially form (unclosed candles)')
+display30m = input.bool(false, title="Show 30m Zones", group = 'Timeframe Options')
+display45m = input.bool(false, title="Show 45m Zones", group = 'Timeframe Options')
+display1h = input.bool(false, title="Show 1h Zones", group = 'Timeframe Options')
+display2h = input.bool(true, title="Show 2h Zones", group = 'Timeframe Options')
+display3h = input.bool(true, title="Show 3h Zones", group = 'Timeframe Options')
+display4h = input.bool(false, title="Show 4h Zones", group = 'Timeframe Options')
+displayD = input.bool(false, title="Show Daily Zones", group = 'Timeframe Options')
+displayW = input.bool(false, title="Show Weekly Zones", group = 'Timeframe Options')
+
+// VIX Inversion Alert Settings
+enableInversionAlerts = input.bool(true, title="Enable VIX Inversion Alerts", group = "VIX Inversion Settings")
+spySymbol = input.string("SPY", title="SPY Symbol", group = "VIX Inversion Settings")
+qqqSymbol = input.string("QQQ", title="QQQ Symbol", group = "VIX Inversion Settings")
+vixSymbol = input.string("VIX", title="VIX Symbol", group = "VIX Inversion Settings")
+
+// variables
+currentTimeframe = timeframe.period
+currentTimeframeNum = timeframe.isseconds ? timeframe.multiplier / 60 : str.tonumber(timeframe.period)
+
+if currentTimeframe == 'D'
+    currentTimeframe := '1440'
+if currentTimeframe == 'W'
+    currentTimeframe := '10080'
+if displayLowerTFZones
+    currentTimeframe := '1'
+
+currentMultiplier = timeframe.isseconds ? timeframe.multiplier / 60 : str.tonumber(timeframe.period)
+momentCTD = math.round(time + (zoneOffset * 60000 * currentMultiplier))
+
+if textSize == 'Auto'
+    textSize := size.auto
+if textSize == 'Tiny'
+    textSize := size.tiny
+if textSize == 'Small'
+    textSize := size.small
+if textSize == 'Normal'
+    textSize := size.normal
+if textSize == 'Large'
+    textSize := size.large
+if textSize == 'Huge'
+    textSize := size.huge
+
+if halign == 'Left'
+    halign := text.align_left
+if halign == 'Center'
+    halign := text.align_center
+if halign == 'Right'
+    halign := text.align_right
+
+if supplyValign == 'Bottom'
+    supplyValign := text.align_bottom
+if supplyValign == 'Center'
+    supplyValign := text.align_center
+if supplyValign == 'Top'
+    supplyValign := text.align_top
+
+if demandValign == 'Bottom'
+    demandValign := text.align_bottom
+if demandValign == 'Center'
+    demandValign := text.align_center
+if demandValign == 'Top'
+    demandValign := text.align_top
+
+var box[] supply_HT = array.new_box()
+var box[] demand_HT = array.new_box()
+
+// VIX Inversion Detection Variables
+var float[] spy_supply_tops = array.new_float()
+var float[] spy_supply_bottoms = array.new_float()
+var float[] spy_demand_tops = array.new_float()
+var float[] spy_demand_bottoms = array.new_float()
+
+var float[] qqq_supply_tops = array.new_float()
+var float[] qqq_supply_bottoms = array.new_float()
+var float[] qqq_demand_tops = array.new_float()
+var float[] qqq_demand_bottoms = array.new_float()
+
+var float[] vix_supply_tops = array.new_float()
+var float[] vix_supply_bottoms = array.new_float()
+var float[] vix_demand_tops = array.new_float()
+var float[] vix_demand_bottoms = array.new_float()
+
+//plotting zones
+
+createSupplyDemandZones(timeframe, trackSymbol) =>
+
+    [open_HT, high_HT, low_HT, close_HT] = request.security(trackSymbol, timeframe, [open[1], high[1], low[1], close[1]], lookahead = barmerge.lookahead_on)
+
+    var timeframeFormatted = ''
+
+    if timeframe == '1'
+        timeframeFormatted := '1m'
+    else if timeframe == '3'
+        timeframeFormatted := '3m'
+    else if timeframe == '5'
+        timeframeFormatted := '5m'
+    else if timeframe == '15'
+        timeframeFormatted := '15m'
+    else if timeframe == '30'
+        timeframeFormatted := '30m'
+    else if timeframe == '45'
+        timeframeFormatted := '45m'
+    else if timeframe == '60'
+        timeframeFormatted := '1h'
+    else if timeframe == '120'
+        timeframeFormatted := '2h'
+    else if timeframe == '180'
+        timeframeFormatted := '3h'
+    else if timeframe == '240'
+        timeframeFormatted := '4h'
+    else if timeframe == 'D'
+        timeframeFormatted := 'D'
+    else if timeframe == 'W'
+        timeframeFormatted := 'W'
+
+    redCandle_HT = close_HT < open_HT
+    greenCandle_HT = close_HT > open_HT
+    neutralCandle_HT = close_HT == open_HT
+    candleChange_HT = math.abs(close_HT - open_HT)
+
+    var float bottomBox_HT = na
+    var float topBox_HT = na
+    momentCTD_HT = time(timeframe)[2]
+
+    supplyCreated = false
+    demandCreated = false
+    
+    if (((redCandle_HT and greenCandle_HT[1]) or (redCandle_HT and neutralCandle_HT[1])) and (candleChange_HT / candleChange_HT[1]) >= candleDifferenceScale and (barstate.isconfirmed[1] or displayFormingZones) and supplyEnable and close_HT[1] >= close_HT and open_HT[1] <= open_HT)
+        if displayFormingZones and barstate.isconfirmed[1] == false
+            timeframeFormatted := timeframeFormatted + '(Forming)'
+        if displayHL
+            timeframeFormatted := timeframeFormatted + '\nTop: ' + str.tostring(topBox_HT) + '\nBottom: ' + str.tostring(open_HT[1])
+
+        if high_HT >= high_HT[1]
+            topBox_HT := high_HT
+        else 
+            topBox_HT := high_HT[1]
+
+        box supply = box.new(left=momentCTD_HT, top=topBox_HT, right=momentCTD, bgcolor=supplyColor, bottom=open_HT[1], xloc=xloc.bar_time)
+        box.set_border_color(supply, supplyBorderColor)
+        if textEnable
+            box.set_text(supply, timeframeFormatted)
+            box.set_text_size(supply, textSize)
+            box.set_text_color(supply, textColor)
+            box.set_text_halign(supply, halign)
+            box.set_text_valign(supply, supplyValign)
+        array.push(supply_HT, supply)
+        
+        supplyCreated := true
+        
+        // Track zones for inversion detection (only 2h and 3h)
+        if enableInversionAlerts and (timeframe == '120' or timeframe == '180')
+            if trackSymbol == spySymbol
+                array.push(spy_supply_tops, topBox_HT)
+                array.push(spy_supply_bottoms, open_HT[1])
+            else if trackSymbol == qqqSymbol
+                array.push(qqq_supply_tops, topBox_HT)
+                array.push(qqq_supply_bottoms, open_HT[1])
+            else if trackSymbol == vixSymbol
+                array.push(vix_supply_tops, topBox_HT)
+                array.push(vix_supply_bottoms, open_HT[1])
+
+    if (((greenCandle_HT and redCandle_HT[1]) or (greenCandle_HT and neutralCandle_HT[1])) and (candleChange_HT / candleChange_HT[1]) >= candleDifferenceScale and (barstate.isconfirmed[1] or displayFormingZones) and demandEnable and close_HT[1] <= close_HT and open_HT[1] >= open_HT)
+        if displayFormingZones and barstate.isconfirmed[1] == false
+            timeframeFormatted := timeframeFormatted + ' (Forming)'    
+        if displayHL
+            timeframeFormatted := timeframeFormatted + '\nTop: ' + str.tostring(open_HT[1]) + '\nBottom: ' + str.tostring(bottomBox_HT)
+
+        if low_HT <= low_HT[1]
+            bottomBox_HT := low_HT
+        else 
+            bottomBox_HT := low_HT[1]
+
+        box demand = box.new(left=momentCTD_HT, top=open_HT[1], right=momentCTD, bottom=bottomBox_HT, bgcolor=demandColor, xloc=xloc.bar_time)
+        box.set_border_color(demand, demandBorderColor)
+        if textEnable
+            box.set_text(demand, timeframeFormatted)
+            box.set_text_size(demand, textSize)
+            box.set_text_color(demand, textColor)
+            box.set_text_halign(demand, halign)
+            box.set_text_valign(demand, demandValign)
+        array.push(demand_HT, demand)
+        
+        demandCreated := true
+        
+        // Track zones for inversion detection (only 2h and 3h)
+        if enableInversionAlerts and (timeframe == '120' or timeframe == '180')
+            if trackSymbol == spySymbol
+                array.push(spy_demand_tops, open_HT[1])
+                array.push(spy_demand_bottoms, bottomBox_HT)
+            else if trackSymbol == qqqSymbol
+                array.push(qqq_demand_tops, open_HT[1])
+                array.push(qqq_demand_bottoms, bottomBox_HT)
+            else if trackSymbol == vixSymbol
+                array.push(vix_demand_tops, open_HT[1])
+                array.push(vix_demand_bottoms, bottomBox_HT)
+
+    [supplyCreated, demandCreated]
+
+// Check if price is touching a zone
+isTouchingZone(price_high, price_low, zone_tops, zone_bottoms) =>
+    touching = false
+    if array.size(zone_tops) > 0
+        for i = 0 to array.size(zone_tops) - 1
+            zoneTop = array.get(zone_tops, i)
+            zoneBottom = array.get(zone_bottoms, i)
+            if (price_low <= zoneTop and price_high >= zoneBottom)
+                touching := true
+                break
+    touching
+
+// Get current price data for each symbol
+[spy_high, spy_low] = request.security(spySymbol, timeframe.period, [high, low])
+[qqq_high, qqq_low] = request.security(qqqSymbol, timeframe.period, [high, low])
+[vix_high, vix_low] = request.security(vixSymbol, timeframe.period, [high, low])
+
+// initiation - Run for current chart symbol
+if display30m and currentTimeframeNum <= 30
+    createSupplyDemandZones('30', syminfo.tickerid)
+if display45m and currentTimeframeNum <= 45
+    createSupplyDemandZones('45', syminfo.tickerid)
+if display1h and currentTimeframeNum <= 60
+    createSupplyDemandZones('60', syminfo.tickerid) 
+if display2h and currentTimeframeNum <= 120
+    createSupplyDemandZones('120', syminfo.tickerid)
+if display3h and currentTimeframeNum <= 180
+    createSupplyDemandZones('180', syminfo.tickerid)
+if display4h and currentTimeframeNum <= 240
+    createSupplyDemandZones('240', syminfo.tickerid)
+if displayD and currentTimeframeNum <= 1440
+    createSupplyDemandZones('D', syminfo.tickerid)
+if displayW and currentTimeframeNum <= 10080
+    createSupplyDemandZones('W', syminfo.tickerid)
+
+// Track zones for SPY, QQQ, and VIX for inversion detection
+if enableInversionAlerts
+    if display2h and currentTimeframeNum <= 120
+        createSupplyDemandZones('120', spySymbol)
+        createSupplyDemandZones('120', qqqSymbol)
+        createSupplyDemandZones('120', vixSymbol)
+    if display3h and currentTimeframeNum <= 180
+        createSupplyDemandZones('180', spySymbol)
+        createSupplyDemandZones('180', qqqSymbol)
+        createSupplyDemandZones('180', vixSymbol)
+
+// remove broken supply
+i_supply = 0
+while i_supply < array.size(supply_HT) and array.size(supply_HT) > 0
+    box currentBox = array.get(supply_HT, i_supply)
+    float breakLevel = box.get_top(currentBox)
+    if high > breakLevel 
+        array.remove(supply_HT, i_supply)
+        box.delete(currentBox)
+        int(na)
+    else
+        box.set_right(currentBox, momentCTD)
+        i_supply += 1
+        int(na)
+
+// remove broken demand
+i_demand = 0
+while i_demand < array.size(demand_HT) and array.size(demand_HT) > 0
+    box currentBox = array.get(demand_HT, i_demand)
+    float breakLevel = box.get_bottom(currentBox)
+    if low < breakLevel 
+        array.remove(demand_HT, i_demand)
+        box.delete(currentBox)
+        int(na)
+    else
+        box.set_right(currentBox, momentCTD)
+        i_demand += 1
+        int(na)
+
+// Remove broken zones from tracked arrays for SPY
+if array.size(spy_supply_tops) > 0
+    for j = array.size(spy_supply_tops) - 1 to 0
+        if spy_high > array.get(spy_supply_tops, j)
+            array.remove(spy_supply_tops, j)
+            array.remove(spy_supply_bottoms, j)
+
+if array.size(spy_demand_bottoms) > 0
+    for k = array.size(spy_demand_bottoms) - 1 to 0
+        if spy_low < array.get(spy_demand_bottoms, k)
+            array.remove(spy_demand_tops, k)
+            array.remove(spy_demand_bottoms, k)
+
+// Remove broken zones from tracked arrays for QQQ
+if array.size(qqq_supply_tops) > 0
+    for l = array.size(qqq_supply_tops) - 1 to 0
+        if qqq_high > array.get(qqq_supply_tops, l)
+            array.remove(qqq_supply_tops, l)
+            array.remove(qqq_supply_bottoms, l)
+
+if array.size(qqq_demand_bottoms) > 0
+    for m = array.size(qqq_demand_bottoms) - 1 to 0
+        if qqq_low < array.get(qqq_demand_bottoms, m)
+            array.remove(qqq_demand_tops, m)
+            array.remove(qqq_demand_bottoms, m)
+
+// Remove broken zones from tracked arrays for VIX
+if array.size(vix_supply_tops) > 0
+    for n = array.size(vix_supply_tops) - 1 to 0
+        if vix_high > array.get(vix_supply_tops, n)
+            array.remove(vix_supply_tops, n)
+            array.remove(vix_supply_bottoms, n)
+
+if array.size(vix_demand_bottoms) > 0
+    for o = array.size(vix_demand_bottoms) - 1 to 0
+        if vix_low < array.get(vix_demand_bottoms, o)
+            array.remove(vix_demand_tops, o)
+            array.remove(vix_demand_bottoms, o)
+
+        //==============================================================================
+// INTRABAR ZONE TOUCH ALERTS
+//==============================================================================
+g_zone_touch = "🎯 Zone Touch Alerts"
+enable_zone_touch_alerts = input.bool(true, "Enable Intrabar Zone Touch Alerts", group=g_zone_touch)
+alert_on_supply_touch = input.bool(true, "Alert on Supply Touch", group=g_zone_touch)
+alert_on_demand_touch = input.bool(true, "Alert on Demand Touch", group=g_zone_touch)
+
+// Tracking variables - prevent duplicate alerts within same bar
+var int supply_touched_index = -1
+var int demand_touched_index = -1
+
+// Reset tracking on new bar
+if barstate.isnew
+    supply_touched_index := -1
+    demand_touched_index := -1
+
+// Flags for this bar's touches
+bool supply_touched_now = false
+bool demand_touched_now = false
+int touched_supply_idx = -1
+int touched_demand_idx = -1
+float touched_supply_top = na
+float touched_supply_bottom = na
+float touched_demand_top = na
+float touched_demand_bottom = na
+
+// Check supply zones for touch (price wicking into zone)
+if enable_zone_touch_alerts and alert_on_supply_touch and array.size(supply_HT) > 0
+    for i = 0 to array.size(supply_HT) - 1
+        box currentBox = array.get(supply_HT, i)
+        float zoneTop = box.get_top(currentBox)
+        float zoneBottom = box.get_bottom(currentBox)
+        
+        // Price touching zone RIGHT NOW (wick enters zone)
+        bool touching = high >= zoneBottom and low <= zoneTop
+        
+        // Only alert if: touching AND not already alerted for this zone this bar
+        if touching and (supply_touched_index != i or not barstate.isrealtime)
+            supply_touched_now := true
+            touched_supply_idx := i
+            touched_supply_top := zoneTop
+            touched_supply_bottom := zoneBottom
+            supply_touched_index := i
+            break
+
+// Check demand zones for touch (price wicking into zone)
+if enable_zone_touch_alerts and alert_on_demand_touch and array.size(demand_HT) > 0
+    for i = 0 to array.size(demand_HT) - 1
+        box currentBox = array.get(demand_HT, i)
+        float zoneTop = box.get_top(currentBox)
+        float zoneBottom = box.get_bottom(currentBox)
+        
+        // Price touching zone RIGHT NOW (wick enters zone)
+        bool touching = high >= zoneBottom and low <= zoneTop
+        
+        // Only alert if: touching AND not already alerted for this zone this bar
+        if touching and (demand_touched_index != i or not barstate.isrealtime)
+            demand_touched_now := true
+            touched_demand_idx := i
+            touched_demand_top := zoneTop
+            touched_demand_bottom := zoneBottom
+            demand_touched_index := i
+            break
+
+// Invisible plots for alert message data (SINGLE LINE EACH)
+plot(touched_supply_top, display=display.none, title="Supply Top")
+plot(touched_supply_bottom, display=display.none, title="Supply Bottom")
+plot(touched_demand_top, display=display.none, title="Demand Top")
+plot(touched_demand_bottom, display=display.none, title="Demand Bottom")
+
+// Alert conditions - INTRABAR, NO REPAINT
+alertcondition(supply_touched_now, title="🔴 Supply Zone Touch", message="Price touching SUPPLY zone at {{high}} | Zone Top: {{plot_0}} | Zone Bottom: {{plot_1}}")
+alertcondition(demand_touched_now, title="🟢 Demand Zone Touch", message="Price touching DEMAND zone at {{low}} | Zone Top: {{plot_2}} | Zone Bottom: {{plot_3}}")
+
+// Detect VIX Inversions
+spyTouchingDemand = isTouchingZone(spy_high, spy_low, spy_demand_tops, spy_demand_bottoms)
+spyTouchingSupply = isTouchingZone(spy_high, spy_low, spy_supply_tops, spy_supply_bottoms)
+
+qqqTouchingDemand = isTouchingZone(qqq_high, qqq_low, qqq_demand_tops, qqq_demand_bottoms)
+qqqTouchingSupply = isTouchingZone(qqq_high, qqq_low, qqq_supply_tops, qqq_supply_bottoms)
+
+vixTouchingSupply = isTouchingZone(vix_high, vix_low, vix_supply_tops, vix_supply_bottoms)
+vixTouchingDemand = isTouchingZone(vix_high, vix_low, vix_demand_tops, vix_demand_bottoms)
+
+// SPY Demand + VIX Supply (Bullish SPY signal)
+spyBullishInversion = enableInversionAlerts and spyTouchingDemand and vixTouchingSupply
+plotshape(spyBullishInversion, title="SPY Bullish Inversion", location=location.belowbar, color=color.new(color.green, 0), style=shape.triangleup, size=size.small, text="SPY⬆")
+
+// SPY Supply + VIX Demand (Bearish SPY signal)
+spyBearishInversion = enableInversionAlerts and spyTouchingSupply and vixTouchingDemand
+plotshape(spyBearishInversion, title="SPY Bearish Inversion", location=location.abovebar, color=color.new(color.red, 0), style=shape.triangledown, size=size.small, text="SPY⬇")
+
+// QQQ Demand + VIX Supply (Bullish QQQ signal)
+qqqBullishInversion = enableInversionAlerts and qqqTouchingDemand and vixTouchingSupply
+plotshape(qqqBullishInversion, title="QQQ Bullish Inversion", location=location.belowbar, color=color.new(color.aqua, 0), style=shape.triangleup, size=size.small, text="QQQ⬆")
+
+// QQQ Supply + VIX Demand (Bearish QQQ signal)
+qqqBearishInversion = enableInversionAlerts and qqqTouchingSupply and vixTouchingDemand
+plotshape(qqqBearishInversion, title="QQQ Bearish Inversion", location=location.abovebar, color=color.new(color.orange, 0), style=shape.triangledown, size=size.small, text="QQQ⬇")
+
+// Alert Conditions
+alertcondition(spyBullishInversion, title="SPY Bullish Inversion", message="🦇 BAT SIGNAL: SPY hitting DEMAND while VIX hitting SUPPLY - Potential bullish setup!")
+alertcondition(spyBearishInversion, title="SPY Bearish Inversion", message="🦇 BAT SIGNAL: SPY hitting SUPPLY while VIX hitting DEMAND - Potential bearish setup!")
+alertcondition(qqqBullishInversion, title="QQQ Bullish Inversion", message="🦇 BAT SIGNAL: QQQ hitting DEMAND while VIX hitting SUPPLY - Potential bullish setup!")
+alertcondition(qqqBearishInversion, title="QQQ Bearish Inversion", message="🦇 BAT SIGNAL: QQQ hitting SUPPLY while VIX hitting DEMAND - Potential bearish setup!")
